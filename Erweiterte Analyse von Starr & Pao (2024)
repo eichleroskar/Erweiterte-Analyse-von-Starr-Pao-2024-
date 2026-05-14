@@ -1,0 +1,150 @@
+### R-Code für die Erweiterung der Analyse von Starr & Pao (2024)
+
+# set your working directory
+# setwd("")
+
+# call packages
+library(tidyverse)
+library(ipumsr)
+library(ggthemes)
+library(scales)
+
+# Folgende Variablen von IPUMS USA des ACS 2019 und 2021 werden für die Reproduktion der Analyse benötigt: 
+# `RACE`, `YEAR`, `HISPAN`, `RACWHT`, `RACOTHER`, `ANCESTR1`, `ANCESTR2`, `RACBLK`, `RACAMIND`  
+
+# Instruktionen darüber, wie die IPUMS Daten bei R eingelesen werden können sind nach Datenanfrage über die Website von IPUMS USA erhältlich.  
+# (.xml Datei muss entsprechend angepasst werden)
+ddi <-read_ipums_ddi("data/usa_0008.xml")
+data <- read_ipums_micro(ddi)
+
+# Figure 3: Änderungen im Antwortverhalten von „Hispanics“ in der Kategorie „White“ von 2017 bis 2023
+
+fig3 <- data %>%
+  mutate(white_hisp = case_when(RACE == 1 & (HISPAN >0 & HISPAN <9) ~ 1),
+         SOR_hisp = case_when(RACE == 7 & (HISPAN >0 & HISPAN <9) ~ 1),
+         white_SOR_hisp = case_when(RACWHT == 2 & RACOTHER == 2 & (HISPAN >0 & HISPAN <9) ~ 1)) %>%
+  group_by(YEAR) %>%
+  summarize(counts_white_hisp = sum(white_hisp, na.rm = T),
+            counts_SOR_hisp = sum(SOR_hisp, na.rm = T),
+            counts_white_SOR_hisp = sum(white_SOR_hisp, na.rm = T))
+
+fig3 <- fig3 %>%
+  pivot_longer(!YEAR, names_to = "Race/Ethnicity", values_to = "Count")
+
+fig3$`Race/Ethnicity` <- factor(fig3$`Race/Ethnicity`, levels = c("counts_white_hisp", "counts_SOR_hisp", "counts_white_SOR_hisp"))
+
+ggplot(fig3, aes(as.factor(YEAR), Count, fill = `Race/Ethnicity`)) +
+  geom_bar(stat= "identity", position = "dodge") +
+  theme_bw() +
+  scale_y_continuous(labels = label_comma()) +
+  scale_fill_colorblind(labels = c("White, Hispanic", "SOR, Hispanic", "White + SOR, Hispanic")) +
+  labs(x = "Year")
+
+# Figure 4: Verlauf der Differenz in den Klassifizierungen „White alone“ und „Black and White“ zwischen 2017 und 2023.
+
+fig4 <- data %>%
+  filter(ANCESTR1 != 999) %>%
+  mutate(
+    zimbabwe = ifelse(ANCESTR1 == 593 | ANCESTR2 == 593, 1, 0),
+    south_africa = ifelse(
+      (ANCESTR1 >= 570 & ANCESTR1 <= 573) |
+        (ANCESTR2 >= 570 & ANCESTR2 <= 573), 1, 0
+    ),
+    kenya = ifelse(ANCESTR1 == 534 | ANCESTR2 == 534, 1, 0),
+    race = case_when(
+      RACWHT == 2 & RACBLK == 2 ~ "black_white",
+      RACE == 1 ~ "white"
+    )
+  ) %>%
+  filter(race %in% c("white", "black_white"),
+         YEAR %in% 2017:2023)
+fig4_yearly <- fig4 %>%
+  group_by(YEAR, race) %>%
+  summarize(
+    zimbabwe = sum(zimbabwe, na.rm = TRUE),
+    south_africa = sum(south_africa, na.rm = TRUE),
+    kenya = sum(kenya, na.rm = TRUE),
+    .groups = "drop"
+  )
+fig4_diffs <- fig4_yearly %>%
+  pivot_longer(
+    cols = c(zimbabwe, south_africa, kenya),
+    names_to = "Country",
+    values_to = "Count"
+  ) %>%
+  pivot_wider(
+    names_from = race,
+    values_from = Count
+  ) %>%
+  mutate(
+    Difference = white - black_white,
+    Country = recode(
+      Country,
+      zimbabwe = "Zimbabwe",
+      south_africa = "South Africa",
+      kenya = "Kenya"
+    )
+  )
+ggplot(fig4_diffs, aes(x = YEAR, y = Difference, color = Country)) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "grey50") +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2) +
+  theme_bw() +
+  scale_color_colorblind() +
+  scale_x_continuous(breaks = 2017:2023) +
+  labs(
+    x = "Year",
+    y = "Difference (White Alone − Black and White)",
+    color = "Country"
+  )
+### Fig 5: Häufigkeiten von „American Indian“ und „Alaska Native“ für 2017 bis 2023.
+
+fig5 <- data %>%
+  mutate(white_native = case_when(RACWHT == 2 & RACAMIND == 2 ~ 1),
+         black_native = case_when(RACBLK == 2 & RACAMIND == 2 ~ 1),
+         native = case_when(RACE == 3 ~ 1)) %>%
+  group_by(YEAR) %>%
+  summarize(counts_white_native = sum(white_native, na.rm = T),
+            counts_black_native = sum(black_native, na.rm = T),
+            counts_native = sum(native, na.rm = T))
+
+fig5 <- fig5 %>%
+  pivot_longer(!YEAR, names_to = "Race", values_to = "Count")
+
+fig5$Race <- factor(fig5$Race, levels = c("counts_native", "counts_white_native", "counts_black_native"))
+
+ggplot(fig5, aes(as.factor(YEAR), Count, fill = Race)) +
+  geom_bar(stat= "identity", position = "dodge") +
+  theme_bw() +
+  scale_y_continuous(labels = label_comma()) +
+  scale_fill_colorblind(labels = c("Native alone", "White and Native", "Black and Native")) +
+  labs(x = "Year")
+
+### Fig 6: Häufigkeiten von „American Indian and Alaska Native“ Angaben von 2017 bis 2023 nach „Ancestry“-Einschreibung.
+
+fig6 <- data %>%
+  filter(ANCESTR1 != 999) %>%
+  mutate(native_writein = case_when((ANCESTR1 == 920 | ANCESTR2 == 920) & RACE == 3 ~ 1),
+         native_white_writein = case_when((ANCESTR1 == 920 | ANCESTR2 == 920) & RACWHT == 2 & RACAMIND == 2 ~ 1),
+         native_no_writein = case_when((ANCESTR1 != 920 & ANCESTR2 != 920) & RACE == 3 ~ 1),
+         native_white_no_writein =  case_when((ANCESTR1 != 920 & ANCESTR2 != 920) & RACWHT == 2 & RACAMIND == 2 ~ 1)
+  )
+
+fig6_summary <- fig6 %>%
+  group_by(YEAR) %>%
+  summarize(counts_native_writein = sum(native_writein, na.rm = T),
+            counts_native_white_writein = sum(native_white_writein, na.rm = T),
+            counts_native_no_writein = sum(native_no_writein, na.rm = T),
+            counts_native_white_no_writein = sum(native_white_no_writein, na.rm = T))
+
+fig6_summary <- fig6_summary %>%
+  pivot_longer(!YEAR, names_to = "Race", values_to = "Count")
+
+fig6_summary$Race <- factor(fig6_summary$Race, levels = c("counts_native_writein", "counts_native_white_writein", "counts_native_no_writein", "counts_native_white_no_writein"))
+
+ggplot(fig6_summary, aes(as.factor(YEAR), Count, fill = Race)) +
+  geom_bar(stat= "identity", position = "dodge") +
+  theme_bw() +
+  scale_y_continuous(labels = label_comma()) +
+  scale_fill_colorblind(labels = c("Native Alone, Ancestry Write-in", "Native and White, Ancestry Write-in", "Native Alone, No Write-in", "Native and White, No Write-in")) +
+  labs(x = "Year")
